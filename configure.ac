@@ -10,6 +10,7 @@ PKG_CHECK_MODULES(DRM, [libdrm])
 PKG_CHECK_MODULES(DCE, [libdce])
 PKG_CHECK_MODULES(UDEV, [libudev])
 PKG_CHECK_MODULES(ALSA, [alsa])
+PKG_CHECK_MODULES(XKB, [xkbcommon])
 
 if test "x$GCC" = "xyes"; then
 	GCC_CFLAGS="-Werror -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -g -fvisibility=hidden -Wstrict-prototypes -Wmissing-prototypes"

@@ -57,10 +57,16 @@ struct eplay
     Evas_Object* win;
     Evas_Object* progress;
     Evas_Object* slider;
+    Ecore_Timer* timer;
 
     Eina_List* input_handler;
 
     struct xkb_context* xkb;
+    struct xkb_state* xkb_state;
+    struct xkb_keymap* xkb_keymap;
+    int xkb_control_mask;
+    int xkb_alt_mask;
+    int xkb_shift_mask;
 
     char current_path[PATH_MAX];
     Elm_Genlist_Item_Class *itc_dir;
@@ -80,6 +86,8 @@ struct eplay
     Ecore_Fd_Handler* udev_handler;
     Eina_List* mount_list;
 };
+
+void eplay_shutdown(struct eplay* ep);
 
 bool eplay_setup_drm(struct eplay* ep);
 void eplay_cleanup_drm(struct eplay* ep);

@@ -32,6 +32,9 @@
 
 #include "eplay.h"
 
+#include <unistd.h>
+#include <sys/reboot.h>
+
 
 EAPI_MAIN int elm_main(int argc, char **argv);
 
@@ -72,6 +75,14 @@ setup_elm(struct eplay* ep)
     ecore_evas_alpha_set(ecore_evas_ews_ecore_evas_get(), EINA_TRUE);
 }
 
+static bool s_poweroff = false;
+
+void eplay_shutdown(struct eplay* ep)
+{
+    s_poweroff = true;
+    elm_exit();
+}
+
 int
 elm_main(int argc, char **argv)
 {
@@ -105,6 +116,12 @@ elm_main(int argc, char **argv)
     eplay_cleanup_udev(&g_player);
     eplay_cleanup_input(&g_player);
     // eplay_cleanup_udev(&g_player);
+
+    if (s_poweroff)
+    {
+        printf("shutdown\n");
+        system("poweroff");
+    }
 
     return 0; // exit 0 for exit code
 }

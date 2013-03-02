@@ -30,8 +30,14 @@
 
 #include <linux/input.h>
 
+#include <xkbcommon/xkbcommon.h>
+
 #include <fcntl.h>
 #include <unistd.h>
+
+#define MOD_SHIFT_MASK 0x01
+#define MOD_ALT_MASK 0x02
+#define MOD_CONTROL_MASK 0x04
 
 static const char* keysyms[];
 
@@ -52,7 +58,6 @@ handle_input_event(void *data, Ecore_Fd_Handler *handler)
 
     while (read(fd, &ev, sizeof ev) == sizeof ev)
     {
-        Ecore_Event_Key *e = calloc(1, sizeof *e);
         //printf("%s:%i\n", __FUNCTION__, __LINE__);
 
         switch (ev.type)
@@ -69,25 +74,62 @@ handle_input_event(void *data, Ecore_Fd_Handler *handler)
             break;
 
         case EV_KEY:
+            {
+                int space = 128;
+                Ecore_Event_Key *e = calloc(1, sizeof(*e) + space);
+                xkb_keycode_t keycode = ev.code + 8;
+                xkb_keysym_t keysym;
+                char* buffer;
+                int size;
+                xkb_mod_mask_t mask;
 
-            printf("key: %u, %u, %s\n", ev.code, ev.value, keysyms[ev.code * 7]);
 
-            e->keyname = keysyms[ev.code * 7];
-            e->key = keysyms[ev.code * 7];
-            e->compose = keysyms[ev.code * 7 + 3];
-            e->string = e->compose;
+                //printf("key: %u, %u, %s\n", ev.code, ev.value, keysyms[ev.code * 7]);
+                if ((ev.value | 1) == 1)
+                    xkb_state_update_key(ep->xkb_state, keycode, ev.value ? XKB_KEY_DOWN : XKB_KEY_UP);
 
-            e->timestamp = ev.time.tv_sec * 1000 + ev.time.tv_usec / 1000;
-            e->window = (Ecore_Window)ep->ee;
-            e->event_window = (Ecore_Window)ep->ee;
+                mask = xkb_state_serialize_mods(ep->xkb_state, XKB_STATE_DEPRESSED | XKB_STATE_LATCHED);
 
-            if (ecore_event_add(ev.value ? ECORE_EVENT_KEY_DOWN: ECORE_EVENT_KEY_UP, e, NULL, NULL))
-                e = NULL;
+                e->modifiers = 0;
+
+                if (mask & ep->xkb_control_mask)
+                    e->modifiers |= MOD_CONTROL_MASK;
+                if (mask & ep->xkb_alt_mask)
+                    e->modifiers |= MOD_ALT_MASK;
+                if (mask & ep->xkb_shift_mask)
+                    e->modifiers |= MOD_SHIFT_MASK;
+
+                printf("modifier: %u, %u\n", e->modifiers, mask);
+
+                keysym = xkb_state_key_get_one_sym(ep->xkb_state, keycode);
+
+                
+                buffer = (char*)(e + 1);
+                e->string = buffer;
+                e->compose = buffer;
+
+                size = xkb_keysym_to_utf8(keysym, buffer, space) + 1;
+                space -= size;
+                buffer += size;
+
+                e->key = buffer;
+                e->keyname = buffer;
+                size = xkb_keysym_get_name(keysym, buffer, space) + 1;
+
+                printf("key: %u, %u, %s, %s\n", ev.code, ev.value, e->key, e->compose);
+
+                e->timestamp = ev.time.tv_sec * 1000 + ev.time.tv_usec / 1000;
+                e->window = (Ecore_Window)ep->ee;
+                e->event_window = (Ecore_Window)ep->ee;
+
+                if (ecore_event_add(ev.value ? ECORE_EVENT_KEY_DOWN: ECORE_EVENT_KEY_UP, e, NULL, NULL))
+                    e = NULL;
+
+                free(e);
+            }
 
             break;
         }
-
-        free(e);
     }
 
     return ECORE_CALLBACK_RENEW;
@@ -104,6 +146,26 @@ eplay_setup_input(struct eplay* ep)
 
     if (eeze_init() < 0)
         return false;
+
+    struct xkb_rule_names rule_names = {
+        .rules = "evdev",
+        .model = "pc105",
+        .layout = "us",
+        .variant = "",
+        .options = ""
+    };
+
+    if ((ep->xkb = xkb_context_new(0)) == NULL ||
+        (ep->xkb_keymap = xkb_keymap_new_from_names(ep->xkb, &rule_names, XKB_MAP_COMPILE_PLACEHOLDER)) == NULL ||
+        (ep->xkb_state = xkb_state_new(ep->xkb_keymap)) == NULL)
+    {
+        fprintf(stderr, "failed to compile keymap\n");
+        return false;
+    }
+
+    ep->xkb_control_mask = 1 << xkb_map_mod_get_index(ep->xkb_keymap, "Control");
+    ep->xkb_alt_mask = 1 << xkb_map_mod_get_index(ep->xkb_keymap, "Mod1");
+    ep->xkb_shift_mask = 1 << xkb_map_mod_get_index(ep->xkb_keymap, "Shift");
 
     const char *sys;
     Eina_List *l, *sysdevs = eeze_udev_find_by_filter("input", NULL, NULL);
@@ -147,140 +209,15 @@ eplay_cleanup_input(struct eplay* ep)
 
     eina_list_free(ep->input_handler);
 
+    if (ep->xkb_state)
+        xkb_state_unref(ep->xkb_state);
+    if (ep->xkb_keymap)
+        xkb_map_unref(ep->xkb_keymap);
+    if (ep->xkb)
+        xkb_context_unref(ep->xkb);
+
     eeze_shutdown();
     ecore_event_evas_shutdown();
     ecore_event_shutdown();
 }
 
-
-/* this table was taken from ecore_fb, is the default en layout */
-static const char* keysyms[] = {
-         "0x00",          "0x00",          "0x00", /**/"",    "",    "",  NULL,/***/
-       "Escape",        "Escape",        "Escape", /**/"",    "",    "",  "\x1b",/***/
-            "1",        "exclam",             "1", /**/"1",   "!",   "1",  NULL,/***/
-            "2",            "at",             "2", /**/"2",   "@",   "2",  "",/***/
-            "3",    "numbersign",             "3", /**/"3",   "#",   "3",  "\x1b",/***/
-            "4",        "dollar",             "4", /**/"4",   "$",   "4",  "\x1c",/***/
-            "5",       "percent",             "5", /**/"5",   "%",   "5",  "\x1d",/***/
-            "6",  "asciicircumm",             "6", /**/"6",   "^",   "6",  "\x1e",/***/
-            "7",     "ampersand",             "7", /**/"7",   "&",   "7",  "\x1f",/***/
-            "8",       "asterisk",            "8", /**/"8",   "*",   "8",  "\x7f",/***/
-            "9",     "parenleft",             "9", /**/"9",   "(",   "9",  NULL,/***/
-            "0",    "parenright",             "0", /**/"0",   ")",   "0",  NULL,/***/
-        "minus",    "underscore",         "minus", /**/"-",   "_",   "-",  NULL,/***/
-        "equal",          "plus",         "equal", /**/"=",   "+",   "=",  NULL,/***/
-    "BackSpace",     "BackSpace",     "BackSpace", /**/"\010","\010","\010",  NULL,/***/
-          "Tab",  "ISO_Left_Tab",           "Tab", /**/"\011","",    "\011",  NULL,/***/
-            "q",             "Q",             "Q", /**/"q",   "Q",   "Q",  "\x11",/***/
-            "w",             "W",             "W", /**/"w",   "W",   "W",  "\x17",/***/
-            "e",             "E",             "E", /**/"e",   "E",   "E",  "\x05",/***/
-            "r",             "R",             "R", /**/"r",   "R",   "R",  "\x12",/***/
-            "t",             "T",             "T", /**/"t",   "T",   "T",  "\x14",/***/
-            "y",             "Y",             "Y", /**/"y",   "Y",   "Y",  "\x19",/***/
-            "u",             "U",             "U", /**/"u",   "U",   "U",  "\x15",/***/
-            "i",             "I",             "I", /**/"i",   "I",   "I",  "\x09",/***/
-            "o",             "O",             "O", /**/"o",   "O",   "O",  "\x0f",/***/
-            "p",             "P",             "P", /**/"p",   "P",   "P",  "\x10",/***/
-  "bracketleft",     "braceleft",   "bracketleft", /**/"[",   "{",   "[",  "\x1b",/***/
- "bracketright",    "braceright",  "bracketright", /**/"]",   "}",   "]",  "\x1d",/***/
-       "Return",        "Return",        "Return", /**/"\015","\015","\015",  NULL,/***/
-    "Control_L",     "Control_L",     "Control_L", /**/"",    "",    "",  NULL,/***/
-            "a",             "A",             "A", /**/"a",   "A",   "A",  "\x01",/***/
-            "s",             "S",             "S", /**/"s",   "S",   "S",  "\x13",/***/
-            "d",             "D",             "D", /**/"d",   "D",   "D",  "\x04",/***/
-            "f",             "F",             "F", /**/"f",   "F",   "F",  "\x06",/***/
-            "g",             "G",             "G", /**/"g",   "G",   "G",  "\x07",/***/
-            "h",             "h",             "H", /**/"h",   "H",   "H",  "\x08",/***/
-            "j",             "J",             "J", /**/"j",   "J",   "J",  "\x0a",/***/
-            "k",             "K",             "K", /**/"k",   "K",   "K",  "\x0b",/***/
-            "l",             "L",             "L", /**/"l",   "L",   "L",  "\x0c",/***/
-    "semicolon",         "colon",     "semicolon", /**/";",   ":",   ";",  NULL,/***/
-   "apostrophe",      "quotedbl",    "apostrophe", /**/"'",   "\"",  "'",  NULL,/***/
-        "grave",    "asciitilde",         "grave", /**/"`",   "~",   "`",  "",/***/
-      "Shift_L",       "Shift_L",       "Shift_L", /**/"",    "",    "",  NULL,/***/
-    "backslash",           "bar",     "backslash", /**/"\\",  "|",   "\\",  "\x1c",/***/
-            "z",             "Z",             "Z", /**/"z",   "Z",   "Z",  "\x1a",/***/
-            "x",             "X",             "X", /**/"x",   "X",   "X",  "\x18",/***/
-            "c",             "C",             "C", /**/"c",   "C",   "C",  "\x03",/***/
-            "v",             "V",             "V", /**/"v",   "V",   "V",  "\x16",/***/
-            "b",             "B",             "B", /**/"b",   "B",   "B",  "\x02",/***/
-            "n",             "N",             "N", /**/"n",   "N",   "N",  "\x0e",/***/
-            "m",             "M",             "M", /**/"m",   "M",   "M",  "\x0d",/***/
-        "comma",          "less",         "comma", /**/",",   "<",   ",",  NULL,/***/
-       "period",       "greater",        "period", /**/".",   ">",   ".",  NULL,/***/
-        "slash",      "question",         "slash", /**/"/",   "?",   "/",  "",/***/
-      "Shift_R",       "Shift_R",       "Shift_R", /**/"",    "",    "",  NULL,/***/
-  "KP_Multiply",   "KP_Multiply",   "KP_Multiply", /**/"",    "*",   "",  NULL,/***/
-        "Alt_L",         "Alt_L",         "Alt_L", /**/"",    "",    "",  NULL,/***/
-        "space",         "space",         "space", /**/" ",   " ",   " ",  "",/***/
-    "Caps_Lock",     "Caps_Lock",     "Caps_Lock", /**/"",    "",    "",  NULL,/***/
-           "F1",            "F1",            "F1", /**/"",    "",    "",  NULL,/***/
-           "F2",            "F2",            "F2", /**/"",    "",    "",  NULL,/***/
-           "F3",            "F3",            "F3", /**/"",    "",    "",  NULL,/***/
-           "F4",            "F4",            "F4", /**/"",    "",    "",  NULL,/***/
-           "F5",            "F5",            "F5", /**/"",    "",    "",  NULL,/***/
-           "F6",            "F6",            "F6", /**/"",    "",    "",  NULL,/***/
-           "F7",            "F7",            "F7", /**/"",    "",    "",  NULL,/***/
-           "F8",            "F8",            "F8", /**/"",    "",    "",  NULL,/***/
-           "F9",            "F9",            "F9", /**/"",    "",    "",  NULL,/***/
-          "F10",           "F10",           "F10", /**/"",    "",    "",  NULL,/***/
-     "Num_Lock",      "Num_Lock",      "Num_Lock", /**/"",    "",    "",  NULL,/***/
-  "Scroll_Lock",   "Scroll_Lock",   "Scroll_Lock", /**/"",    "",    "",  NULL,/***/
-      "KP_Home",          "KP_7",       "KP_Home", /**/"",    "7",   "",  NULL,/***/
-        "KP_Up",          "KP_8",         "KP_Up", /**/"",    "8",   "",  NULL,/***/
-     "KP_Prior",          "KP_9",      "KP_Prior", /**/"",    "9",   "",  NULL,/***/
-  "KP_Subtract",   "KP_Subtract",   "KP_Subtract", /**/"",    "",    "",  NULL,/***/
-      "KP_Left",          "KP_4",       "KP_Left", /**/"",    "4",   "",  NULL,/***/
-     "KP_Begin",          "KP_5",      "KP_Begin", /**/"",    "5",   "",  NULL,/***/
-     "KP_Right",          "KP_6",      "KP_Right", /**/"",    "6",   "",  NULL,/***/
-       "KP_Add",        "KP_Add",        "KP_Add", /**/"",    "",    "",  NULL,/***/
-       "KP_End",          "KP_1",        "KP_End", /**/"",    "1",   "",  NULL,/***/
-      "KP_Down",          "KP_2",       "KP_Down", /**/"",    "2",   "",  NULL,/***/
-      "KP_Next",          "KP_3",       "KP_Next", /**/"",    "3",   "",  NULL,/***/
-    "KP_Insert",          "KP_0",     "KP_Insert", /**/"",    "0",   "",  NULL,/***/
-    "KP_Delete",    "KP_Decimal",     "KP_Delete", /**/"",    ".",   "",  NULL,/***/
-         "0x54",          "0x54",          "0x54", /**/"",    "",    "",  NULL,/***/
-         "0x55",          "0x55",          "0x55", /**/"",    "",    "",  NULL,/***/
-         "0x56",          "0x56",          "0x56", /**/"",    "",    "",  NULL,/***/
-          "F11",           "F11",           "F11", /**/"",    "",    "",  NULL,/***/
-          "F12",           "F12",           "F12", /**/"",    "",    "",  NULL,/***/
-         "0x59",          "0x59",          "0x59", /**/"",    "",    "",  NULL,/***/
-         "0x5a",          "0x5a",          "0x5a", /**/"",    "",    "",  NULL,/***/
-         "0x5b",          "0x5b",          "0x5b", /**/"",    "",    "",  NULL,/***/
-         "0x5c",          "0x5c",          "0x5c", /**/"",    "",    "",  NULL,/***/
-         "0x5d",          "0x5d",          "0x5d", /**/"",    "",    "",  NULL,/***/
-         "0x5e",          "0x5e",          "0x5e", /**/"",    "",    "",  NULL,/***/
-         "0x5f",          "0x5f",          "0x5f", /**/"",    "",    "",  NULL,/***/
-     "KP_Enter",      "KP_Enter",      "KP_Enter", /**/"\015", "\015", "\015",  NULL,/***/
-    "Control_R",     "Control_R",     "Control_R", /**/"",    "",    "",  NULL,/***/
-    "KP_Divide",     "KP_Divide",     "KP_Divide", /**/"",    "",    "",  NULL,/***/
-        "Print",         "Print",         "Print", /**/"",    "",    "",  NULL,/***/
-        "Alt_R",         "Alt_R",         "Alt_R", /**/"",    "",    "",  NULL,/***/
-         "0x65",          "0x65",          "0x65", /**/"",    "",    "",  NULL,/***/
-         "Home",          "Home",          "Home", /**/"",    "",    "",  NULL,/***/
-           "Up",            "Up",            "Up", /**/"",    "",    "",  NULL,/***/
-        "Prior",         "Prior",         "Prior", /**/"",    "",    "",  NULL,/***/
-         "Left",          "Left",          "Left", /**/"",    "",    "",  NULL,/***/
-        "Right",         "Right",         "Right", /**/"",    "",    "",  NULL,/***/
-          "End",           "End",           "End", /**/"",    "",    "",  NULL,/***/
-         "Down",          "Down",          "Down", /**/"",    "",    "",  NULL,/***/
-         "Next",          "Next",          "Next", /**/"",    "",    "",  NULL,/***/
-       "Insert",        "Insert",        "Insert", /**/"",    "",    "",  NULL,/***/
-       "Delete",        "Delete",        "Delete", /**/"\177","\177","\177",  NULL,/***/
-         "0x70",          "0x70",          "0x70", /**/"",    "",    "",  NULL,/***/
-"XF86AudioMute", "XF86AudioMute", "XF86AudioMute", /**/"",    "",    "",  NULL,/***/
-"XF86AudioLowerVolume", "XF86AudioLowerVolume", "XF86AudioLowerVolume", /**/"",    "",    "",  NULL,/***/
-"XF86AudioRaiseVolume", "XF86AudioRaiseVolume", "XF86AudioRaiseVolume", /**/"",    "",    "",  NULL,/***/
-         "0x74",          "0x74",          "0x74", /**/"",    "",    "",  NULL,/***/
-         "0x75",          "0x75",          "0x75", /**/"",    "",    "",  NULL,/***/
-         "0x76",          "0x76",          "0x76", /**/"",    "",    "",  NULL,/***/
-        "Pause",         "Pause",         "Pause", /**/"",    "",    "",  NULL,/***/
-         "0x78",          "0x78",          "0x78", /**/"",    "",    "",  NULL,/***/
-         "0x79",          "0x79",          "0x79", /**/"",    "",    "",  NULL,/***/
-         "0x7a",          "0x7a",          "0x7a", /**/"",    "",    "",  NULL,/***/
-         "0x7b",          "0x7b",          "0x7b", /**/"",    "",    "",  NULL,/***/
-         "0x7c",          "0x7c",          "0x7c", /**/"",    "",    "",  NULL,/***/
-      "Super_L",       "Super_L",       "Super_L", /**/"",    "",    "",  NULL,/***/
-      "Super_R",       "Super_R",       "Super_R", /**/"",    "",    "",  NULL,/***/
-         "0x7f",          "0x7f",          "0x7f", /**/"",    "",    "",  NULL, /***/
-};

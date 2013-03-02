@@ -192,6 +192,19 @@ void menu_control_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
         update_path(ep, parent);
         free(parent);
     }
+    else if (strcmp(ev->keyname, "End") == 0 &&
+        evas_key_modifier_is_set(ev->modifiers, "Alt") &&
+         evas_key_modifier_is_set(ev->modifiers, "Control"))
+    {
+        eplay_shutdown(ep);
+    }
+}
+
+static
+void delete_timer(struct eplay* ep)
+{
+    if (ep->timer) ecore_timer_del(ep->timer);
+    ep->timer = NULL;
 }
 
 static
@@ -214,18 +227,19 @@ void control_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
     }
     else if (strcmp(ev->keyname, "Up") == 0)
     {
-        elm_progressbar_value_set(obj, eplay_seek(ep, -20));
+        elm_progressbar_value_set(obj, eplay_seek(ep, -30));
         eplay_show_overlay(ep);
     }
     else if (strcmp(ev->keyname, "Down") == 0)
     {
-        elm_progressbar_value_set(obj, eplay_seek(ep, 20));
+        elm_progressbar_value_set(obj, eplay_seek(ep, 30));
         eplay_show_overlay(ep);
     }
     else if (strcmp(ev->keyname, "space") == 0)
     {
         eplay_set_playing(ep, !playing);
         elm_progressbar_value_set(obj, eplay_get_progress(ep));
+        delete_timer(ep);
         if (playing)
             eplay_show_overlay(ep);
         else
@@ -243,11 +257,28 @@ void control_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 }
 
 static
+Eina_Bool timer_cb(void *data)
+{
+    struct eplay *ep = data;
+    ep->timer = NULL;
+    eplay_hide_overlay(ep);
+    return ECORE_CALLBACK_CANCEL;
+}
+
+static
+void set_overlay_timeout(struct eplay* ep)
+{
+    delete_timer(ep);
+    ecore_timer_add(3.0, timer_cb, ep);
+}
+
+static
 void volume_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 {
     struct eplay *ep = data;
     Evas_Event_Key_Down *ev = event_info;
     long vol = eplay_get_volume(ep);
+    bool show = ep->show_overlay;
 
     if (strcmp(ev->keyname, "XF86AudioLowerVolume") == 0)
     {
@@ -264,6 +295,11 @@ void volume_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
         //elm_progressbar_value_set(obj, eplay_seek(ep, -20));
         printf("todo\n");
         eplay_show_overlay(ep);
+    }
+
+    if (!show)
+    {
+        set_overlay_timeout(ep);
     }
 
     elm_slider_value_set(obj, (double)eplay_get_volume(ep));
@@ -363,6 +399,7 @@ bool eplay_setup_gui(struct eplay* ep)
 
 void eplay_cleanup_gui(struct eplay* ep)
 {
+    delete_timer(ep);
     elm_genlist_item_class_free(ep->itc_file);
     elm_genlist_item_class_free(ep->itc_dir);
 }
